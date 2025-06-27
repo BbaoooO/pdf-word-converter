@@ -20,6 +20,17 @@ wheels/
 *.egg
 MANIFEST
 
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
 # PyInstaller
 *.manifest
 *.spec
