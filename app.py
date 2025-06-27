@@ -3,9 +3,11 @@ import os
 import tempfile
 from werkzeug.utils import secure_filename
 from pdf2docx import Converter
-from docx2pdf import convert
 import threading
 import time
+from docx import Document
+import subprocess
+from io import BytesIO
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'
@@ -35,6 +37,83 @@ def delete_file_after_delay(filepath, delay=300):  # Xóa file sau 5 phút
     thread = threading.Thread(target=delete_file)
     thread.daemon = True
     thread.start()
+
+def convert_docx_to_pdf_linux(input_path, output_path):
+    """Chuyển đổi DOCX sang PDF trên Linux sử dụng LibreOffice"""
+    try:
+        # Thử sử dụng LibreOffice (có sẵn trên hầu hết Linux servers)
+        cmd = [
+            'libreoffice', 
+            '--headless', 
+            '--convert-to', 'pdf', 
+            '--outdir', os.path.dirname(output_path),
+            input_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        
+        if result.returncode == 0:
+            # LibreOffice tạo file với tên khác, cần đổi tên
+            base_name = os.path.splitext(os.path.basename(input_path))[0]
+            temp_pdf = os.path.join(os.path.dirname(output_path), f"{base_name}.pdf")
+            
+            if os.path.exists(temp_pdf):
+                if temp_pdf != output_path:
+                    os.rename(temp_pdf, output_path)
+                return True
+        
+        # Nếu LibreOffice không hoạt động, thử pandoc
+        cmd = ['pandoc', input_path, '-o', output_path]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        
+        if result.returncode == 0 and os.path.exists(output_path):
+            return True
+            
+        # Nếu cả hai đều không hoạt động, sử dụng python-docx + weasyprint
+        return convert_docx_to_pdf_python(input_path, output_path)
+        
+    except Exception as e:
+        print(f"Lỗi convert_docx_to_pdf_linux: {e}")
+        return convert_docx_to_pdf_python(input_path, output_path)
+
+def convert_docx_to_pdf_python(input_path, output_path):
+    """Chuyển đổi DOCX sang PDF sử dụng python-docx + weasyprint"""
+    try:
+        from docx import Document
+        import weasyprint
+        
+        # Đọc DOCX
+        doc = Document(input_path)
+        
+        # Chuyển đổi thành HTML
+        html_content = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; }
+                p { margin-bottom: 10px; }
+                h1, h2, h3, h4, h5, h6 { margin: 20px 0 10px 0; }
+            </style>
+        </head>
+        <body>
+        """
+        
+        for paragraph in doc.paragraphs:
+            if paragraph.text.strip():
+                html_content += f"<p>{paragraph.text}</p>\n"
+        
+        html_content += "</body></html>"
+        
+        # Chuyển HTML thành PDF
+        weasyprint.HTML(string=html_content).write_pdf(output_path)
+        
+        return os.path.exists(output_path)
+        
+    except Exception as e:
+        print(f"Lỗi convert_docx_to_pdf_python: {e}")
+        return False
 
 @app.route('/')
 def index():
@@ -90,7 +169,11 @@ def convert_file():
             output_path = os.path.join(UPLOAD_FOLDER, output_filename)
             
             # Chuyển đổi DOCX sang PDF
-            convert(input_path, output_path)
+            success = convert_docx_to_pdf_linux(input_path, output_path)
+            if not success:
+                flash('Lỗi khi chuyển đổi DOCX sang PDF. Vui lòng thử lại!', 'error')
+                os.remove(input_path)
+                return redirect(url_for('index'))
         
         else:
             flash('Kiểu chuyển đổi không hợp lệ!', 'error')
